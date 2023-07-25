@@ -1,0 +1,144 @@
+//#define EIGENLIB			// uncomment to use Eigen linear algebra library
+
+#include "fun_head_fast.h"
+
+// do not add Equations in this area
+
+MODELBEGIN
+
+// insert your equations here, ONLY between the MODELBEGIN and MODELEND words
+
+EQUATION("init_library")
+/*
+Comment: Model initialization: create value library
+*/
+v[1] = VS( PARENT , "N" ); // Number of components in the combinatory problem
+v[2] = pow( 2 , VS( PARENT , "K" ) ); // Aggregate level K for "simple" problems
+v[3] = VS( PARENT , "alpha" );// alpha in beta distribution. Object: Model (Parameter)
+v[4] = VS( PARENT , "beta" );// beta in beta distribution. Object: Model (Parameter)
+v[5] = VS( PARENT , "GlobalK" ); // Is K global (=1) or component-speficic (=0)
+CYCLE(cur, "Library") // Cycle thorugh itself
+{
+	v[10] = 0; // Counter for component
+	CYCLES(cur, cur1, "component") // Create component index in the library
+	{
+		v[10]++;															// counting 
+		if ( v[10] == 1 )													// just model existing
+		{
+			v[10] = floor( v[1] );									// create N
+			v[10] = fmax( 2, v[10] );											// no less than 2 
+			ADDNOBJS( cur, "component", v[10] - 1 );				// create objects
+		}
+		WRITES( cur1 , "n_v" , max( 0 , v[10] - v[1] ) );			// Write ID
+		WRITES( cur1 , "K_n" , uniform_int( 1 , VS( PARENT , "K" ) ) ); 			// Write individual K
+		if( v[5] == 0 )
+			v[11] = pow( 2 , VS( cur1 , "K_n" ) );
+			else
+			v[11] = v[2];
+		v[20] = 0; // Counter for values
+		CYCLES(cur1, cur2, "value")
+		{
+			v[20]++;															// counting 
+			if ( v[20] == 1 )													// just model existing
+			{
+				v[20] = floor( v[11] );									// create 2^K
+				v[20] = fmax( 2 , v[20] );											// no less than 1
+				ADDNOBJS( cur1, "value", v[20] - 1 );				// create objects
+			}
+			WRITES( cur2 , "nk_v" , max( 0 , v[20] - v[11] ) );		// Write ID
+			WRITES( cur2 , "wn_v" , beta( v[3] ,  v[4] ) ); 						// Print performance 	
+		}
+	}
+}
+PARAMETER
+RESULT(1)
+
+EQUATION("init_search")
+/*
+Comment: Model initialization: create search structure
+*/
+v[1] = VS( PARENT , "N" ); // Number of components in the combinatory problem
+v[2] = VS( PARENT , "K" ); // Aggregate level K for "simple" problems
+v[3] = VS( PARENT , "GlobalK" );
+CYCLE(cur, "Search") // Cycle thorugh itself
+{
+	v[10] = 0; // Counter for component
+	CYCLES(cur, cur1, "Component") // Create component index in the library
+	{
+		v[10]++;															// counting 
+		if ( v[10] == 1 )													// just model existing
+		{
+			v[10] = floor( v[1] );									// create N
+			v[10] = fmax( 2, v[10] );											// no less than 2 
+			ADDNOBJS( cur, "Component", v[10] - 1 );				// create objects
+		}
+		WRITES( cur1 , "n" , max( 0 , v[10] - v[1] ) );			// Write ID
+		cur3 = SEARCH_CND( "n_v" , VS( cur1 , "n" ) );
+		if( v[3] == 0 )
+			v[11] = VS( cur3 , "K_n" );
+			else
+			v[11] = v[2];
+		v[20] = 0; // Counter for values
+		CYCLES(cur1, cur2, "Partners")
+		{
+			v[20]++;															// counting 
+			if ( v[20] == 1 )													// just model existing
+			{
+				v[20] = floor( v[11] );									// create 2^K
+				v[20] = fmax( 1 , v[20] );											// no less than 1 
+				ADDNOBJS( cur1, "Partners", v[20] - 1 );				// create objects
+			}
+			WRITES( cur2 , "nk" , max( 0 , v[20] - v[11] ) );		// Write ID
+			if( VS( cur2 , "nk" ) == 0 )
+				WRITES( cur2 , "n_nk" , VS( cur1 , "n" ) );
+				else
+				WRITES( cur2 , "n_nk" , uniform_int( 0 , v[1] - 1 ) ); 				// Print performance 	
+		}
+	}
+}
+PARAMETER
+RESULT(1)
+
+EQUATION("w")
+/*
+Comment: Component combination performance
+*/
+RESULT( AVES( THIS , "wn" ) )
+
+EQUATION("wn")
+/*
+Comment: Performance contribution of component N
+*/
+v[0] = 0; 	// Start counter
+CYCLE(cur, "Partners")
+{
+	v[10] = VS( cur , "s_nk" ); // State of n's k-th partner
+	v[11] = VS( cur , "nk" ); // partner position k for n
+	v[0] = v[0] + v[10] * pow( 2 , v[11] ); // Decimal to binary
+}
+cur1 = SEARCH_CND( "n_v" , VS( THIS , "n" ) ); // Point at the library for n
+cur2 = SEARCH_CNDS( cur1 , "nk_v" , v[0] ); // Find the value for the specific partner combination
+RESULT( VS( cur2 , "wn_v" ) ) // Print value
+
+EQUATION("s_nk")
+/*
+Comment: State of the k-th partner of component n
+*/
+v[0] = VS( THIS , "n_nk" ); // component of n's k-th partner
+cur = SEARCH_CNDS( GRANDPARENT , "n" , v[0] ); // Find component
+RESULT( VS( cur , "s_n" ) ) // Print state
+
+EQUATION("s_n")
+/*
+Comment: State of component n
+*/
+RESULT( 1 - uniform_int( 0 , 1 ) ) // Random walk
+
+MODELEND
+
+// do not add Equations in this area
+
+void close_sim( void )
+{
+	// close simulation special commands go here
+}
