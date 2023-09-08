@@ -1,0 +1,1297 @@
+//#define EIGENLIB			// uncomment to use Eigen linear algebra library
+
+#include"fun_head_fast.h"
+
+// do not add Equations in this area
+
+MODELBEGIN
+
+// insert your equations here,ONLY between the MODELBEGIN and MODELEND words
+
+// INITIALIZATION
+
+EQUATION("init_Policy")
+/*
+Comment: initialize policy values
+*/
+WRITES(THIS,"sRD",0.1*uniform_int(0,3));
+WRITES(THIS,"sAD",0.05*uniform_int(0,3));
+WRITES(THIS,"CoT",0.15*uniform_int(0,3));
+WRITES(THIS,"CCd",0.0005*uniform_int(0,3));
+WRITES(THIS,"RP",1*uniform_int(0,1));
+WRITES(THIS,"K_min",5);
+WRITES(THIS,"K_max",5);
+WRITES(THIS,"rho",-0.5);
+PARAMETER
+RESULT(0)
+
+EQUATION("init_Param")
+/*
+Comment: Correct wrong model-level parameter values for landscape creation.
+*/
+v[1] = VS(THIS,"N");//Components in the NK landscape
+if(v[1]< 2)// No less than 2 components
+	WRITES(THIS,"N",2);
+v[2] = VS(THIS,"K_min");//Minimum interdependence of a component
+if(v[2]< 1)// No less than 1 K
+	WRITES(THIS,"K_min", 1);
+v[3] = VS(THIS,"K_max");//Maximum interdependence of a component
+if(v[3]> VS(THIS,"N"))// No more than N K
+	WRITES(THIS,"K_max",VS(THIS,"N"));
+if(v[3]<v[2])// K max cannot be lower than K min
+	WRITES(THIS,"K_max",v[2]);
+v[4] = VS(THIS,"J");//Number of firms
+if(v[4]< 2)// No less than 2 firms
+	WRITES(THIS,"J",2);
+v[5] = VS(THIS,"M");//Firm memory capacity
+if(v[5]< 2)// No less than 2 technologies in memory capacity
+	WRITES(THIS,"M",2);
+v[6] = fact(v[1])/(2*fact(v[1]-2));//Memory capacity to include all 2-distance jumps
+if(v[5]<=v[1]||v[5]>(v[1]+v[2]))//Not too-long jumps, but some long-jumps.
+	WRITES(THIS,"M",v[1]+5);
+v[7] = VS(THIS,"rho");//Correlation of technology attributes
+if(v[7]>1||v[7]<-1)// Rho within [-1,1]
+	WRITES(THIS,"rho",0);
+v[8] = VS(THIS,"gamma");//Consumer environmental awareness
+if(v[8]<0||v[8]>1)// Gamma between [0,1]
+	WRITES(THIS,"gamma",0.25);
+v[9] = VS(THIS,"mu0");//Initial mark-up
+if(v[9]<=0)//Positive mark-up
+	WRITES(THIS,"mu0",0.25);
+PARAMETER
+RESULT(1)
+
+EQUATION("init_library")
+/*
+Comment: Model initialization: create value library: Library (cur)-> Components_Library (cur1)(n)-> Values (cur2)(vn)
+*/
+v[1] = VS(PARENT,"N"); // Number of components in the combinatory problem
+v[2] = VS(PARENT,"K_min");// Minimum # of components a component's performance can depend on
+v[3] = VS(PARENT,"K_max"); // Maximum # of components a commponent's performance can depend on
+v[4] = VS(PARENT,"rho"); // Correlation w1~w2 (at component contribution level)
+v[5] = VS(PARENT,"scale_low"); // Lower bound of the scale for performance values
+v[6] = VS(PARENT,"scale_up"); // Upper bound of the scale for performance values
+CYCLE(cur,"Library")// Cycle thorugh itself: This object contains all performance values in the fitness landscape at component level
+{
+	v[10] = 0; 		// Counter to create descending object.
+	CYCLES(cur,cur1,"Components_Library")				// Create object: Contain information about the number of components the fitness contribution of this component depends on (Kn)
+	{
+		v[10]++;										// counting 
+		if (v[10]==1)									// just model existing
+		{
+			v[10] = floor(v[1]);							// create N
+			v[10] = fmax(2,v[10]);							// no less than 2 
+			ADDNOBJS(cur,"Components_Library",v[10] - 1);	// create objects
+		}
+		WRITES(cur1,"n",max(0,v[10] - v[1]));			// Write component ID in library
+		WRITES(cur1,"Kn",uniform_int(v[2],v[3]));		// Write individual K
+		v[11] = pow(2,VS(cur1,"Kn"));					// Number of state combinations of component n and the other Kn components to which n depends on
+		v[20] = 0; 										// Counter to create descending object.
+		CYCLES(cur1,cur2,"Values")						// Create object: This obect contains information about the fitness contribution of a component given the state combination of its partner components
+		{
+			v[20]++;										// counting 
+			if (v[20]==1)									// just model existing
+			{
+				v[20] = floor(v[11]);							// create 2^Kn
+				v[20] = fmax(2,v[20]);							// no less than 1
+				ADDNOBJS(cur1,"Values", v[20] - 1);				// create objects
+			}
+			WRITES(cur2,"vn",max(0,v[20] - v[11]));			// Write value ID corresponding to a unique state combination of a component and its partners.
+			WRITES(cur2,"w1vn",uniform(v[5],v[6])); 				// Print component fitness contribution (first attribute)
+		}
+	}
+}
+CYCLE(cur,"Library")//Cycle through itself
+{
+	CYCLES(cur,cur1,"Components_Library")//Cycle through itself
+	{
+		CYCLES(cur1,cur2,"Values")						// Add the second performance, being rho-correlated to the first (within the same scale)
+		{
+		WRITES(cur2,"w2vn_",VS(cur2,"w1vn")*v[4]+uniform(v[5],v[6])*pow(1-pow(v[4],2),0.5));//rho-correlated contribution to carbon emissions.
+		}
+	}
+}
+// The following is needed for re-scaling
+if(v[4]>=0) // If rho is positive
+	{
+	v[7] = v[4] * v[5] + pow(1-pow(v[4],2),0.5) * v[5]; // This is the lowest possible value
+	v[8] = v[4] * v[6] + pow(1-pow(v[4],2),0.5) * v[6]; // This is the highest possible value
+	}
+	else
+	{
+	v[7] = v[4] * v[6] + pow(1-pow(v[4],2),0.5) * v[5]; // This is the lowest possible value
+	v[8] = v[4] * v[5] + pow(1-pow(v[4],2),0.5) * v[6]; // This is the highest possible value
+	}
+CYCLE(cur,"Library")//Cycle through itself
+{
+	CYCLES(cur,cur1,"Components_Library")//Cycle through itself
+	{
+		CYCLES(cur1,cur2,"Values")						// Re-scaling carbon emissions to "monetary"-like terms
+		{
+		v[21] = VS(cur2,"w2vn_");						//Un-scaled carbon emissions
+		WRITES(cur2,"w2vn",v[5]+(v[21]-v[7])/(v[8]-v[7])*(v[6]-v[5]));//rho-correlated contribution to carbon emissions.
+		}
+	}
+}
+PARAMETER
+RESULT(1)
+
+EQUATION("init_market")
+/*
+Comment: Model initialization: create market structure: Market (cur) -> Firm(j) (cur1) -> Component_F(nj) (cur4) -> Partners_C (cur5) (knj)
+																	-> RPM	(cur7)     -> Memory_F(mj) (cur3)
+																		               -> Competitors_F(hj) (cur2) [used to update gamma]
+		Support pointers: (cur6): Find component in library to get Kn
+*/
+v[1] = VS(PARENT,"N"); // Number of components in the combinatory problem. Object: Model.
+v[2] = VS(PARENT,"J"); // Number of firms. Object: Model.
+v[3] = VS(PARENT,"M"); // Memory capacity. Object: Model.
+v[4] = VS(PARENT,"scale_low"); // Lower bound of the scale for performance values
+v[5] = VS(PARENT,"scale_up"); // Upper bound of the scale for performance values
+v[6] = VS(PARENT,"mu0");// Initial mark-up
+CYCLE(cur,"Market") // Cycle thorugh itself: This object contains the meso-economic phenomena that emerge from firm-consumer interactions.
+{
+	v[10] = 0; 									// Counter to create descending object.
+	WRITES(cur,"Y_t",1/(v[5]*(1+v[6])));		// Write initial production consistent with initialization assumptions.
+	WRITES(cur,"GHG_t",1/(1+v[6]));				// Write initial greenhouse emissions consistent with initialization assumptions.
+	WRITES(cur,"CC_t",2);						// Write initial carbon intensity legal threshold.
+	CYCLES(cur,cur1,"Firms")					// Create object containing firm-level information, both in the competition and search boxes.
+	{
+		v[10]++;									// counting
+		if(v[10]==1)								// just model existing
+		{
+			v[10] = floor(v[2]);						// create J
+			v[10] = fmax(2, v[10]);						// no less than 2 
+			ADDNOBJS(cur,"Firms", v[10] - 1);			// create objects
+		}
+		WRITES(cur1,"j",max(0,v[10] - v[2]));		// Write the firm's ID
+		WRITES(cur1,"w1imp_jt",v[5]);				// Set initial cost as the highest possible cost (implemented technology).
+		WRITES(cur1,"w1exp_jt",v[5]);				// Set initial cost as the highest possible cost (experimented technology).
+		WRITES(cur1,"w1loc_jt",v[5]);				// Set initial cost as the highest possible cost (location technology).
+		WRITES(cur1,"w2imp_jt",v[5]);				// Set initial pollution as the highest possible cost (implemented technology).
+		WRITES(cur1,"w2exp_jt",v[5]);				// Set initial pollution as the highest possible cost (experimented technology).
+		WRITES(cur1,"w2loc_jt",v[5]);				// Set initial pollution as the highest possible cost (location technology).
+		WRITES(cur1,"wexp_jt",v[5]);				// Set initial fitness as the highest possible cost (experimented technology).
+		WRITES(cur1,"wloc_jt",v[5]);				// Set initial fitness as the highest possible cost (location technology).		
+		WRITES(cur1,"ximp_jt",-2);					// Set initial technology ID as empty
+		WRITES(cur1,"xexp_jt",-2);					// Set initial technology ID as empty
+		WRITES(cur1,"xloc_jt",-2);					// Set initial technology ID as empty
+		WRITES(cur1,"b_jt",0);						// Set initial budget,"b_jt",1);
+		if(VS(cur1,"j") != 0)						// The first firm is not dead
+		{
+			WRITES(cur1,"m_jt",1/v[2]);					// Set Initial market share as fair market share
+			WRITES(cur1,"Pm_jt",1/v[2]);				// Set Initial market share as fair market share
+			WRITES(cur1,"mT_jt",1/v[2]);				// Set initial target market share as the fair market share
+			WRITES(cur1,"mu_jt",v[6]);					// Set Initial mark-up
+			WRITES(cur1,"gamma_jt",uniform(0,1));		// Set initial weight to pollution
+			WRITES(cur1,"y_jt",1/(v[2]*v[5]*(1+v[6])));	// Set initial production.
+		}					
+		v[20] = 0;									// Counter to create descending object.
+		v[30] = 0;									// Counter to create descending object.
+		v[40] = 0;									// Counter to create descending object.
+		CYCLES(cur1,cur2,"Competitors_F")			// Create firm competitors information for gamma updating.
+		{
+			v[20]++;									// counting 
+			if(v[20]==1)								// just model existing
+			{
+				v[20] = floor(v[2]);						// create J
+				v[20] = fmax(2, v[20]);						// no less than 2 
+				ADDNOBJS(cur1,"Competitors_F", v[20] - 1);	// create objects
+			}
+			WRITES(cur2,"hj",max(0,v[20] - v[2]));		// Write competitor ID
+			if(VS(cur2,"hj") != 0 && VS(cur2,"hj") != VS(cur1,"j"))// Exclude empty competitor and own firm
+				WRITES(cur2,"score_hjt",1);					// Write initial selection score: initially the same for everyone	
+		}
+		CYCLES(cur1,cur3,"Memory_F")				// Create firm memory information for the search box.
+		{
+			v[30]++;									// counting 
+			if(v[30]==1)								// just model existing
+			{
+				v[30] = floor(v[3]);						// create M
+				v[30] = fmax(2, v[30]);						// no less than 2 
+				ADDNOBJS(cur1,"Memory_F", v[30] - 1);		// create objects
+			}
+			WRITES(cur3,"mj",max(0,v[30] - v[3]));		// Write memory slot ID
+			WRITES(cur3,"w1_mjt",v[5]);					// Set default cost as the maximum.
+			WRITES(cur3,"w2_mjt",v[5]);					// Set default pollution as the maximum.
+			WRITES(cur3,"f_mjt",1/v[5]);						// Set default fitness as the worst.
+			WRITES(cur3,"x_mjt",-1);					// ID = -1 means that the memory slot is not being occupied
+		}
+		CYCLES(cur1,cur4,"Components_F") 			// Create firm component information for the search box.
+		{
+			v[40]++;									// counting 
+			if(v[40]==1)								// just model existing
+			{
+				v[40] = floor(v[1]);						// create N
+				v[40] = fmax(2, v[40]);						// no less than 2 
+				ADDNOBJS(cur1,"Components_F", v[40] - 1);	// create objects
+			}
+			WRITES(cur4,"nj",max(0,v[40] - v[1]));		// Write component ID
+			cur6 = SEARCH_CND("n",VS(cur4,"nj"));		// Find component in library
+			v[41] = VS(cur6,"Kn");						// Print number of components to which n depends on
+			WRITES(cur4,"sloc_njt",uniform_int(0,1));	// Print initial state for current location
+			WRITES(cur4,"sexp_njt",VS(cur4,"sloc_njt"));// Print the same state for the explored location.
+			WRITES(cur4,"w1loc_njt", v[5]);				// Set initial cost contribution as the highest
+			WRITES(cur4,"w1exp_njt", v[5]);				// Set initial cost contribution as the highest
+			WRITES(cur4,"w2loc_njt", v[5]);				// Set initial pollution contribution as the highest
+			WRITES(cur4,"w2exp_njt", v[5]);				// Set initial pollution contribution as the highest
+			v[50] = 0; 									// Counter to create descending object.
+			CYCLES(cur4,cur5,"Partners_C")				// Create component partner's information to define component fitness contribution based on the partner's state combination
+			{
+				v[50]++;									// counting 
+				if(v[50]==1)								// just model existing
+				{
+					v[50] = floor(v[41]);						// create 2^K
+					v[50] = fmax(1,v[50]);						// no less than 1 
+					ADDNOBJS(cur4,"Partners_C", v[50] - 1);		// create objects
+				}
+				WRITES(cur5,"knj",max(0,v[50] - v[41]));	// Write partner ID
+				v[51] = VS(cur5,"knj") + VS(cur4,"nj");		// Un-adjusted component represented by partner k
+				if(v[51]>(v[1]-1))							// Select partner by picking the next in the string order.
+					WRITES(cur5,"nknj",v[51]-v[1]);				// Apply toroidal if needed.
+					else
+					WRITES(cur5,"nknj",v[51]);					// Else, do not
+			}
+		}	
+	}
+}
+PARAMETER
+RESULT(1)
+
+// SELECTION & EVALUATION
+
+EQUATION("inA_mjt")
+/*
+Comment: The technology is not listed as accepted. Memory-level variable.
+*/
+v[1] = VS(THIS,"x_mjt");//Technology ID. Memory-level variable.
+v[2] = VS(THIS,"w2_mjt");//Technology carbon intensity. Memory-level variable.
+v[3] = VS(GRANDPARENT,"CC_t");//Carbon intensity threshold. Model-level parameter
+v[4] = SUM_CNDS(GRANDPARENT,"jm","xm","==",v[1]);//Check if m is in RPM
+if((v[2] > v[3] && v[4] > 0) || v[1] < 0)//If m is in RPM and pollutes above the legal threshold
+	v[0] = 0;//It is not accepted.
+	else
+	v[0] = 1;//It is accepted.
+RESULT(v[0])
+
+EQUATION("f_mjt")
+/*
+Comment: Subjective fitness of the technology occupying the m-th memory slot in j's memory at time t.
+*/
+v[1] = VLS(PARENT,"gamma_jt",1);//Subjective weight to carbon emissions
+v[2] = VS(THIS,"w1_mjt");//Cost
+v[3] = VS(THIS,"w2_mjt");//Carbon emissions
+v[4] = VS(THIS,"inA_mjt");//Binary: Accepted technology or not.
+v[0] = v[4]/((1-v[1])*v[2]+v[1]*v[3]);//Inverse weighted average
+RESULT(v[0])
+
+EQUATION("imp_mjt")
+/*
+Comment: Implement the most preffered technology among the acceptable. Memory-level variable.
+*/
+v[1] = MAXS(PARENT,"f_mjt");//Choose the most preferred technology among the acceptable.
+v[2] = VS(THIS,"f_mjt");//Check if it is m
+v[3] = VS(THIS,"w1_mjt");// m cost
+v[4] = VS(THIS,"w2_mjt");//m carbon intensity
+v[5] = VS(THIS,"x_mjt");//Technology ID
+v[6] = V("scale_up");//Scaled up value
+v[7] = VS(PARENT,"j");//Kill the empty firm.
+if(v[1] == v[2])//If m is the preferred technology
+	{
+	v[0] = 1;//Mark as winning technology
+	WRITES(PARENT,"w1imp_jt",v[3]);//Print cost
+	WRITES(PARENT,"w2imp_jt",v[4]);//Print carbon intensity
+	WRITES(PARENT,"ximp_jt",v[5]);//Print ID
+	WRITES(PARENT,"dead_jt",0);//Mark the company as alive
+	}
+	else
+	v[0] = 0;//Mark m as not chosen.
+if(v[1] == 0 || v[7] == 0)//If j does not have accepted technologies or is the empty firm
+	{
+	WRITES(PARENT,"w1imp_jt",v[6]);//Print cost
+	WRITES(PARENT,"w2imp_jt",v[6]);//Print carbon intensity
+	WRITES(PARENT,"ximp_jt",-1);//Print ID
+	WRITES(PARENT,"dead_jt",1);//Mark the company as alive
+	}
+RESULT(v[0])
+
+EQUATION("w1exp_jt")
+/*
+Comment: 1st fitness of the searched technology. Firm j at time t.
+*/
+v[0] = AVES(THIS,"w1exp_njt");//Average the fitness contribution of each component
+RESULT(v[0])
+
+EQUATION("w2exp_jt")
+/*
+Comment: 2nd fitness of the searched technology. Firm j at time t.
+*/
+v[0] = AVES(THIS,"w2exp_njt");//Average the fitness contribution of each component
+RESULT(v[0])
+
+EQUATION("wexp_jt")
+/*
+Comment: Subjective fitness of the experimented technology. Firm j at time t.
+*/
+v[1] = VLS(THIS,"gamma_jt",1);//Subjective weight to carbon emissions
+v[2] = VS(THIS,"w1exp_jt");//Cost
+v[3] = VS(THIS,"w2exp_jt");//Carbon emissions
+v[4] = (1-v[1])*v[2]+v[1]*v[3];//Weighted average
+RESULT(v[4])
+
+EQUATION("w1loc_jt")
+/*
+Comment: 1st fitness of the location technology. Firm j at time t.
+*/
+v[0] = AVES(THIS,"w1loc_njt");//Average the fitness contribution of each component
+RESULT(v[0])
+
+EQUATION("w2loc_jt")
+/*
+Comment: 1st fitness of the location technology. Firm j at time t.
+*/
+v[0] = AVES(THIS,"w2loc_njt");//Average the fitness contribution of each component
+RESULT(v[0])
+
+EQUATION("wloc_jt")
+/*
+Comment: Subjective fitness of the location technology. Firm j at time t.
+*/
+v[1] = VLS(THIS,"gamma_jt",1);//Subjective weight to carbon emissions
+v[2] = VS(THIS,"w1loc_jt");//Cost
+v[3] = VS(THIS,"w2loc_jt");//Carbon emissions
+v[4] = (1-v[1])*v[2]+v[1]*v[3];//Weighted average
+RESULT(v[4])
+
+EQUATION("xexp_jt")
+/*
+Comment: ID of the current search experimentation tecnology. Firm j at time t.
+*/
+v[0] = 0;//Counter, convert binary into decimal
+CYCLE(cur,"Components_F")//Cycle through the search components of the firm
+{
+	v[11] = VS(cur,"nj");//Component ID
+	v[12] = VS(cur,"sexp_njt");//Component state (in experimentation, by default)
+	v[0] = v[0] + v[12] * pow(2,v[11]);//Binary to decimal
+}
+RESULT(v[0])
+
+EQUATION("xloc_jt")
+/*
+Comment: ID of the current search location tecnology. Firm j at time t.
+*/
+v[0] = 0;//Counter, convert binary into decimal
+CYCLE(cur,"Components_F")//Cycle through the search components of the firm
+{
+	v[11] = VS(cur,"nj");//Component ID
+	v[12] = VS(cur,"sloc_njt");//Component state (in experimentation, by default)
+	v[0] = v[0] + v[12] * pow(2,v[11]);//Binary to decimal
+}
+RESULT(v[0])
+
+EQUATION("w1exp_njt")
+/*
+Comment: Cost contribution of component n in the experimented technology (by default) of firm j at time t.
+*/
+v[1] = 0;// Start counter to find the reference in the value library
+CYCLE(cur,"Partners_C")
+{
+	v[10] = VS(cur,"s_knjt"); // State of n's k-th partner
+	v[11] = VS(cur,"knj"); // partner k position in the binary string affecting component n
+	v[1] = v[1] + v[10] * pow(2,v[11]); // Decimal to binary
+}
+cur1 = SEARCH_CND("n",VS(THIS,"nj")); // Point at the library for n
+cur2 = SEARCH_CNDS(cur1,"vn",v[1]); // Find the value for the specific partner combination
+v[0] = VS(cur2,"w1vn");//Get the performance contribution of the component, given the state combination of its partners.
+RESULT(v[0])
+
+EQUATION("w2exp_njt")
+/*
+Comment: Pollution contribution of component n in the experimented technology (by default) of firm j at time t.
+*/
+v[1] = 0;// Start counter to find the reference in the value library
+CYCLE(cur,"Partners_C")
+{
+	v[10] = VS(cur,"s_knjt"); // State of n's k-th partner
+	v[11] = VS(cur,"knj"); // partner k position in the binary string affecting component n
+	v[1] = v[1] + v[10] * pow(2,v[11]); // Decimal to binary
+}
+cur1 = SEARCH_CND("n",VS(THIS,"nj")); // Point at the library for n
+cur2 = SEARCH_CNDS(cur1,"vn",v[1]); // Find the value for the specific partner combination
+v[0] = VS(cur2,"w2vn");//Get the performance contribution of the component, given the state combination of its partners.
+RESULT(v[0])
+
+EQUATION("s_knjt")
+/*
+Comment: State of the k-th partner of component n. Firm j at time t.
+*/
+v[1] = VS(THIS,"nknj"); // component of n's k-th partner
+cur = SEARCH_CNDS(GRANDPARENT,"nj",v[1]); // Find component
+v[0] = VS(cur,"sexp_njt"); // Print state
+RESULT(v[0]) // Print state
+
+// SEARCH
+
+EQUATION("unknown_njt")
+/*
+Comment: If j changes the state of component n at time t, would the resulting technology be unknown ?
+*/
+v[1] = VLS(PARENT,"xloc_jt",1); // Past-period firm technology at location.
+v[2] = pow(2,VS(THIS,"nj")); // Decimal contribution to the component if it is in state 1
+if(VLS(THIS,"sloc_njt",1)==1) // If the component was at state 1 in the past period
+	v[3] = v[1] - v[2]; // Adjust past firm location by switching the component's state to 0
+	else
+	v[3] = v[1] + v[2]; // Else, adjust past firm location by switching the component's state to 1.
+v[4] = SUM_CNDS(PARENT,"t_mjt","x_mjt","==",v[3]); // Sum the time of all memory technologies with the same ID
+if(v[4] > 0)// If there are no technologies in j's memory with the same ID
+	v[0] = 0; // The technology is known
+	else
+	v[0] = 1; // Else, it is unknown
+RESULT(v[0])
+
+EQUATION("RP_njt")
+/*
+Comment: If j changes the state of component n at time t, would the resulting technology be advertised by the RP?
+*/
+v[1] = VLS(PARENT,"xloc_jt",1); // Past-period firm technology at location.
+v[2] = pow(2,VS(THIS,"nj")); // Decimal contribution to the component if it is in state 1
+if(VLS(THIS,"sloc_njt",1)==1) // If the component was at state 1 in the past period
+	v[3] = v[1] - v[2]; // Adjust past firm location by switching the component's state to 0
+	else
+	v[3] = v[1] + v[2]; // Else, adjust past firm location by switching the component's state to 1.
+v[4] = SUM_CNDS(GRANDPARENT,"ARP_mt","xm","==",v[3]); // Find if the technology is in RP memory and advertised
+if(v[4] > 0)// If there are no advertised technologies in RP memory with the same ID
+	v[0] = 1; // The technology is advertised
+	else
+	v[0] = 0; // Else, it is not advertised
+RESULT(v[0])
+
+EQUATION("q_jt")
+/*
+Comment: Search jump: 0 if at sticking point and not willing or able. 2 if at sticking point willing, and able. 1 if not at sticking point.
+*/
+v[1] = SUMS(THIS,"unknown_njt"); //Sum of component changes that would lead to a new technology
+v[2] = VS(GRANDPARENT,"N"); // Number of components
+v[3] = VLS(THIS,"b_jt",1);//Firm j's budget at time t.
+v[4] = VS(GRANDPARENT,"cRD")*(1-VLS(THIS,"inV_jt",1)*VS(GRANDPARENT,"sRD"));//Research cost, subsidized if applicable. [Model-level parameter and Firm-level variable]
+v[5] = VS(THIS,"m_jt");//Current market share. Firm-level variable
+v[6] = VS(THIS,"mT_jt");//Current market share target. Firm-level variable
+if(v[5]>v[6])//If market share is above target
+	v[10] = 0;//The firm is unwilling to search at a sticking point.
+	else
+	v[10] = 2;//Else, it is willing to do a long-jump 
+if(v[1] > 0)//If financially unconstrained, what is the desired search jump ?
+	v[11] = 1;//Local search if there is a 1-distance unknown location.
+	else
+	v[11] = v[10];//Long-jump if the firm knows it is at a sticking point.
+if(v[3]>=v[4]*v[11])//Is the firm able to pay for the desired search range ?
+	v[0] = v[11];//Search range = Desired search range
+	else
+	v[0] = 0;//Search range = 0
+RESULT(v[0])
+
+EQUATION("score_njt")
+/*
+Comment: Component n's score (probability) to be changed during j's search at time t.
+*/
+v[1] = VS(THIS,"unknown_njt"); // Is the alternative location (after switching the state of the component) known ?
+v[2] = VS(THIS,"RP_njt");//Is the technology advertised by the RP?
+if(v[1]==0)
+	v[10] = uniform(0,0.1); // If it is, assign low score.
+	else
+	v[10] = uniform(0.9,1); // Else, assign high score.
+if(v[1]==1 && v[2]==1)
+	{
+	v[0] = uniform(1.5,2);//Higher score
+	INCRS(PARENT,"RP_jt",1);//Increment by 1 the number of times the RP is being used
+	}
+	else
+	v[0] = v[10];
+RESULT(v[0])
+
+EQUATION("sexp_njt")
+/*
+Comment: State of component n during j's exploration at time t.
+*/
+v[1] = VS(THIS,"q_jt"); // Search range
+v[2] = VS(THIS,"score_njt"); // Score to be selected to be changed during exploration.
+v[3] = MAXS(PARENT,"score_njt"); // Score of the component that will be changed.
+v[4] = VLS(THIS,"sloc_njt",1); // Past (location) component state.
+v[5] = MINS(PARENT,"score_njt");//Get minimum if doing a long-jump.
+if(v[1] == 1 && v[2] == v[3]) // If j is doing local search, change the bit if it has the highest score.
+	v[10] = 1 - v[4]; // Change
+	else
+	v[10] = v[4]; // Do not change
+if(v[1] == 2 && v[3] == v[5]) // If j is doing a large search and the component is selected
+	v[0] = 1 - v[4]; // Change
+	else
+	v[0] = v[10]; // Do not change
+RESULT(v[0])
+
+EQUATION("sloc_njt")
+/*
+Comment: State of component n after accepting/denying the newly search technology.
+*/
+v[1] = VLS(THIS,"sloc_njt",1);//Past component state in the location technology
+v[2] = VS(THIS,"sexp_njt");//Component state in the searched technology
+v[3] = VLS(PARENT,"wloc_jt",1);//Location technology fitness
+v[4] = VS(PARENT,"wexp_jt");//Explored technology fitness
+v[5] = VS(THIS,"w1exp_njt");//Cost contribution of component n in the experimentation technology. 
+v[6] = VS(THIS,"w2exp_njt");//Pollution contribution of component n in the experimentation technology. 
+if(v[3]<v[4])//If the cost of the search technology is strictly higher
+	v[0] = v[1];//Do not adopt
+	else
+	{
+	v[0] = v[2];//Adopt
+	WRITES(THIS,"w1loc_njt",v[5]);//And print new cost contribution
+	WRITES(THIS,"w2loc_njt",v[6]);//And print new pollution contribution
+	}
+RESULT(v[0])
+
+EQUATION("memory_jt")
+/*
+Comment: Command to update memory. Firm j at time t.
+*/
+v[1] = VS(THIS,"xexp_jt");//ID of the explored technology
+v[2] = VLS(THIS,"xloc_jt",1);//ID of the location technology in the past period
+v[3] = 0; // Sum the time of all memory technologies with the same ID
+CYCLES(THIS,cur1,"Memory_F")//Cycle through memory slots
+	{
+	v[10] = VS(cur1,"x_mjt");//Get technology ID
+	if(v[10]==v[1])//If the technology is in memory
+		v[3] = v[3] + 1;//Add counter
+		else
+		v[3] = v[3];//Else, ignore.
+	}
+v[4] = MAXS(THIS,"score_mjt");//Get the memory slot with the highest score to be replaced.
+cur = SEARCH_CNDS(THIS,"score_mjt",v[4]);//Find slot
+v[5] = VS(THIS,"w1exp_jt");//Cost of the explored technology
+v[6] = VS(THIS,"w2exp_jt");//Pollution of the explored technology. 
+if(v[1] == v[2] || v[3] > 0)//If j has not explored a new technology.
+	v[0] = v[3];//Do not update memory
+	else
+	{
+	WRITES(cur,"x_mjt",v[1]);//Print technology ID
+	WRITES(cur,"w1_mjt",v[5]);//Print performance
+	WRITES(cur,"w2_mjt",v[6]);//Print performance
+	WRITES(cur,"t_mjt",1);//Set timer to 1
+	v[0] = v[3];//Mark as TRUE
+	}
+RESULT(v[0])
+
+EQUATION("t_mjt")
+/*
+Comment: Timer of a technology without being used/explored: 1 if explored or used.
+*/
+v[1] = VS(THIS,"x_mjt");//Find if the slot is occupied by a technology
+v[2] = VLS(THIS,"t_mjt",1);//Past timer - needed for updating.
+if(v[1] == -1)//If the memory slot is empty
+	v[10] = 0;//Keep timer at 0
+	else
+	v[10] = v[2] + 1;//Else, add a unit.
+v[3] = VLS(PARENT,"xexp_jt",1);//Past searched technology
+v[4] = VLS(PARENT,"xloc_jt",1);//Past location technology
+v[5] = VLS(PARENT,"ximp_jt",1);//Past implemented technology
+if(v[1] == v[3] || v[1] == v[4] || v[1] == v[5])//If the technology is being searched, used as locaiton, or implemented
+	v[0] = 1;//Set timer back to 1
+	else
+	v[0] = v[10];//Else, keep timer as before.
+RESULT(v[0])
+
+EQUATION("score_mjt")
+/*
+Comment: Score to be replaced for a time-slot. If there is an empty slot, that one. Else, the one with the highest time.
+*/
+v[1] = VS(THIS,"t_mjt");// Timer without being used/explored (for empty slot this is 0)
+v[2] = VS(THIS,"x_mjt");//Find if the slot is empty
+v[3] = VS(THIS,"mj");//Slot ID
+if(v[2] == -1)//If the slot is empty
+	v[0] = v[3]; // Use the ID to sort.
+	else
+	v[0] = -1 / (1+v[1]); //Else, use the timer to sort. 
+RESULT(v[0])
+
+// COMPETITION
+
+EQUATION("p_jt")
+/*
+Comment: Pre-policy retail price: Cost + mark-up. Firm j at time t.
+*/
+v[1] = VS(THIS,"w1imp_jt");//Cost of the implemented technology. Firm-level variable
+v[2] = VLS(THIS,"mu_jt",1);//Past-period mark-up. Firm-level variable
+v[3] = VLS(THIS,"inV_jt",1);//j is a policy beneficiary. Firm-level variable
+v[4] = VS(GRANDPARENT,"sAD");//Adoption subsidy. Model-level parameter
+v[5] = VS(GRANDPARENT,"CoT");//Carbon tax. Model-level parameter
+v[6] = VS(THIS,"w2imp_jt");//Carbon intensity. Firm-level variable.
+v[0] = v[1]*(1+v[2])*(1-v[3]*v[4])+v[5]*v[6];//Cost + mark-up pricing - adoption subsidy (if applicable) + carbon tax
+RESULT(v[0])
+
+EQUATION("mu_jt")
+/*
+Comment: Mark-up. Pro-cyclical to changes in the market share. Firm j at time t.
+*/																	
+v[1] = VLS(THIS,"mu_jt",1);// Past mark-up
+v[2] = VS(GRANDPARENT,"theta_mu");// Intensity of change
+v[3] = VS(THIS,"m_jt");// Current market share
+v[4] = VLS(THIS,"m_jt",1);// Past market share
+if( v[4] > 0 )//Avoid invalid results.
+	v[0] = v[1] * (1 + v[2] * (v[3] - v[4]) / v[4]);// Mark-up is pro-cyclical to changes in the market share
+	else
+	v[0] = VS(GRANDPARENT,"mu0");// Avoid invalid results, use initial value as default
+RESULT(v[0])
+
+EQUATION("f_jt")
+/*
+Comment: Fitness to consumer's preferences. Firm j at time t.
+*/
+v[1] = VS(GRANDPARENT,"gamma");//Consumer preferences for carbon. Model-level parameter.
+v[2] = VS(THIS,"p_jt");//Retail price. Firm-level variable.
+v[3] = VS(THIS,"w2imp_jt");//Carbon intensity. Firm-level variable.
+v[4] = VS(THIS,"j");//Firm ID (ignore the empty firm). Firm-level parameter
+v[5] = (1-v[1])*v[2]+v[1]*v[3];//Weighted average of product attributes. Firm-level variable
+if( v[4] == 0 || v[5] == 0 )//Avoid invalid results and ignore the empty firm.
+	v[0] = 0;//0 Fitness if such is the case
+	else
+	v[0] = 1/v[5];//Else, the fitness equals inverse of the weighted costs.
+RESULT(v[0])
+
+EQUATION("f_t")
+/*
+Comment: Weighted average of firms' fitness - weighted by the past market share. Market-level variable.
+*/
+v[0] = 0;//Start counter
+CYCLE(cur,"Firms")//Cycle through firms
+	v[0] = v[0] + VS(cur,"f_jt")*VLS(cur,"m_jt",1);	// Sum the fitness weighted by the past market shares.
+RESULT(v[0])
+
+EQUATION("m_jt")
+/*
+Comment: Market share (path and fitness dependent). Firm-level variable.
+*/
+v[1] = VLS(THIS,"m_jt",1);//Past market share. Firm-level variable.
+v[2] = VS(THIS,"theta_m");//Intensity of competition. Model-level parameter.
+v[3] = VS(THIS,"f_jt");//Firm fitness. Firm-level variable.
+v[4] = VS(THIS,"f_t");//Market-level fitness. Market-level variable.
+v[5] = VS(GRANDPARENT,"J");//Number of firms. Model-level parameter
+v[6] = VS(THIS,"j");//Firm ID. Firm-level parameter.
+if(v[4] == 0)//Avoid invalid results
+	v[10] = 1/v[5];//Assign the "fair" market share by default.
+	else
+	v[10] = v[1] * (1+v[2]*(v[3]-v[4])/v[4]);//Else, apply the fitness-based replicator dynamics.
+if(v[6] == 0)//Ignore the empty firm.
+	v[0] = 0; //Assign 0 market-share.
+	else
+	v[0] = v[10];//Give the actual market share to the others.
+RESULT(v[0])
+
+EQUATION("Pi_jt")
+/*
+Comment: Operating profits -before R&D expenditures. Firm-level variable.
+*/
+v[1] = VS(THIS,"m_jt");//Market share. Firm-level variable.
+v[2] = VLS(THIS,"mu_jt",1);//Past mark-up. Firm-level variable.
+v[0] = v[1] * (1 - 1 / ( 1 + v[2]));// (Because of isoelastic demand): Increase with MS and decrease with MU.
+RESULT(v[0])
+
+EQUATION("y_jt")
+/*
+Comment: Quantities produced. Firm-level variable.
+*/
+v[1] = VS(THIS,"m_jt");//Market share = Revenue (D=1). Firm-level variable.
+v[2] = VS(THIS,"p_jt");//Retail price. Firm-level variable.
+if(v[2] == 0)//Avoid invalid results.
+	v[0] = 0;//Invalid result
+	else
+	v[0] = v[1]/v[2];//Revenues divided by price.
+RESULT(v[0])
+
+EQUATION("b_jt")
+/*
+Comment: Firm budget (perpetual accummulation). Firm-level variable.
+*/
+v[1] = VLS(THIS,"b_jt",1);//Past budget. Firm-level variable.
+v[2] = VS(THIS,"Pi_jt");//Operating profits.Firm-level variable.
+v[3] = VS(THIS,"q_jt");//Search effort. Firm-level variable.
+v[4] = VS(GRANDPARENT,"cRD");//Search costs. Model-level parameter.
+v[5] = VS(THIS,"j");//Firm ID.Firm-level parameter.
+v[6] = VLS(THIS,"inV_jt",1);//Is the firm a policy beneficiary. Firm-level variable.
+v[7] = VS(GRANDPARENT,"sRD");//Subsidy to R&D. Model-level parameter.
+if(v[5] == 0)//Ignore empty firm
+	v[0] = 0;//Ignore
+	else
+	v[0] = v[1] + v[2] - v[3] * v[4] * (1-v[6]*v[7]);//Budget = Past + OP - Search Costs (subsidized if applicable)
+RESULT(v[0])
+
+// UPDATE OF TARGETS & BELIEFS
+
+EQUATION("score_hjt")																// Probability of selecting a competitor. Object: Firms_Competitors_jq
+v[1] = VS( THIS , "hj" );															// Competitor ID. Object: Firms_Competitors_jq
+cur = SEARCH_CNDS( GRANDPARENT , "j" , v[1] );										// Find firm in Market.
+v[2] = VS( cur , "p_jt" );															// Print price. Object. Market_Firms_j
+if( v[1] == 0 || v[1] == VS( PARENT, "j" ) )										// Exclude empty firm and j
+	v[0] = 0;																
+	else
+	v[0] = 10 - abs( VS( THIS , "p_jt" ) - v[2] );									// Inverse absolute price difference
+RESULT( v[1] )
+
+EQUATION("m_hjt")																	// Competitors' market share. Object: Firms_Competitors_jq
+v[1] = VS( THIS , "hj" );															// Competitor ID. Object: Firms_Competitors_jq
+cur = SEARCH_CNDS( GRANDPARENT , "j" , v[1] );										// Find firm in Market.
+v[0] = VS( cur , "m_jt" );															// Competitor market share
+RESULT(v[0])																		// Print market share. Object: Market_Firms_j
+
+EQUATION("w2imp_hjt")																// Competitors' greenness. Object: Firms_Competitors_jq
+v[1] = VS( THIS , "hj" );															// Competitor ID. Object: Firms_Competitors_jq
+cur = SEARCH_CNDS( GRANDPARENT , "j" , v[1] );										// Find firm in Market.
+v[0] = VS(cur,"w2imp_jt");
+RESULT(v[0])																		// Print greenness. Object: Market_Firms_j
+
+EQUATION("gamma_jt")																// Firm j's estimated environmental prefernces. Object: Market_Firms_j
+v[1] = VLS( THIS , "gamma_jt" , 1 );												// Past estimated environmental preference. Object: Market_Firms_j
+v[2] = VS( GRANDPARENT , "theta_gamma" );											// Intensity of change. Object: Model (Parameter)
+v[3] = VS( THIS , "m_jt" );															// Market share. Object: Market_Firms_j
+v[4] = VS( THIS , "w2imp_jt" );													// Pollution. Object: Market_Firms_j
+cur = RNDDRAW( "Competitors_F" , "score_hjt" );// Select a competitor based on price proximity
+v[5] = VS( cur , "m_hjt" );// q market share. Object: Firms_Competitors_jq
+v[6] = VS( cur , "w2imp_hjt" );// q Pollution. Object: Market_Firms_j
+if( v[3] < v[5] )														// Firm is activated and it has a lower market share than the competitor
+	v[10] = v[1] * ( 1 + v[2] * ( v[4] - v[6] ) );										// Change with replicator dynamics								
+	else
+	v[10] = v[1];																		// Else, do not change
+v[0] = max( 0 , min ( 1 , v[10] ) );// Bound [0,1]
+RESULT(v[0])												
+
+EQUATION("mT_jt")																	// Firm market share target. Object: Market_Firms_j
+v[1] = VLS(THIS,"mT_jt",1);													// Past target. Object: Market_Firms_j
+v[2] = VS(THIS,"m_jt");//Current market share
+v[3] = VLS(THIS,"m_jt",1);//Past market share
+if(v[3] == 0)//Avoid invalid results
+	v[4] = 0;//Avoid invalid results
+	else
+	v[4] = (v[2]-v[3])/v[3];//Percentual change in market share
+if( v[4] >= 0 )
+	v[0] = v[1] * ( 1 + VS( GRANDPARENT , "theta_mT" ) * v[4] );						// Replicator dynamics. Adjustment parameter in Model (parameter)
+	else
+	v[0] = v[1] * ( 1 + VS( GRANDPARENT , "theta_mT" ) / 2 * v[4] );					// Replicator dynamics. Adjustment parameter in Model (parameter) 
+RESULT( v[0] )
+
+//POLICIES
+
+EQUATION("inV_jt")
+/*
+Comment: Is j a policy beneficiary? Firm-level variable
+*/
+v[1] = VS(THIS,"w2imp_jt");//past carbon intensity. Firm-level variable.
+v[2] = VS(GRANDPARENT,"w2T");//Carbon intensity target. Market-level variable.
+if(v[1]>v[2])//If the firm carbon intensity is above the market target.
+	v[0] = 0;//The firm is not a policy beneficiary.
+	else
+	v[0] = 1;//Else, it is
+RESULT(v[0])
+
+EQUATION("memory_t")
+/*
+Comment: Update RPM memory.
+*/
+v[0] = 0;//Start counter
+v[1] = VS(PARENT,"RP");//Is the RP activated?
+v[2] = VS(PARENT,"CCd");//Regulatory speed
+CYCLE(cur,"Firms")
+{
+	v[10] = VLS(cur,"ximp_jt",1);//Implemented technology
+	v[11] = VLS(cur,"w1imp_jt",1);//Cost of the implemented technology
+	v[12] = VLS(cur,"w2imp_jt",1);//Pollution of the implemented technology
+	v[13] = VS(cur,"j");//Firm ID
+	v[14] = SUM_CNDS(THIS,"jm","xm","==",v[10]);//Check if the technology is already in memory.
+	if(v[14] > 0 || v[10] < 0 || v[13] == 0 || (v[1] == 0 && v[2] == 0))//If the technology or the firm do not exist, or the technology is already in MRP
+		v[0] = v[0];//Do not update counter.
+		else
+	{
+		v[0] = v[0] + 1;//Update counter
+		cur1 = ADDOBJS(THIS,"RPM");//Set pointer
+		WRITES(cur1,"xm",v[10]);//Print ID
+		WRITES(cur1,"w1m",v[11]);//Print cost
+		WRITES(cur1,"w2m",v[12]);//Print carbon intensity
+		WRITES(cur1,"jm",v[13]);//Print firm ID		
+	}
+}
+RESULT(v[0])
+
+EQUATION("ARP_mt")
+/*
+Comment: Is the technology advertised by the RP?
+*/
+v[1] = VS(GRANDPARENT,"w2T");
+v[2] = VS(THIS,"w2m");
+if(v[2]<v[1])
+	v[0] = 1;
+	else
+	v[0] = 0;
+RESULT(v[0])
+
+EQUATION("CC_t")
+/*
+Comment: Maximum carbon intensity permited by the regulator.
+*/
+v[1] = VS(PARENT,"w2T");// Carbon efficiency target
+v[2] = VS(PARENT,"CCd");// Regulatory speed
+v[3] = VLS(THIS,"CC_t",1);// Past threshold
+v[0] = max(v[1],(1-v[2])*v[3]);// Apply discount, having the target as a limit
+RESULT(v[0])
+
+//MARKET-LEVEL VARIABLES
+
+EQUATION("HHI_t")
+/*
+Comment: Herfindahl-Hirschman Index: Market concentration. Market-level variable.
+*/
+v[0] = 0;//Start counter.
+CYCLE(cur,"Firms")//Cycle through firms
+{
+	v[11] = pow(VS(cur,"m_jt"),2);//Squared-market share
+	v[0] = v[0] + v[11];//Sum them.
+}
+RESULT(v[0])
+
+		// SD 
+EQUATION("muSD_t")																	// SD mark-up. Object: Market.
+if(T<3)//Avoid invalid results
+	v[0] = 0;//Avoid invalid results
+	else
+	SD_CNDS( THIS , "mu_jt" , "j" , ">" , 0 );// Print SD mark-up. 
+RESULT(v[0])							
+
+EQUATION("w1impSD_t")																// SD market performance. Object: Market.
+RESULT( SD_CNDS( THIS , "w1imp_jt" , "j",">" , 0 ) )						// Print SD performance.
+
+EQUATION("w2impSD_t")																// SD environmental performance. Object: Market.
+RESULT( SD_CNDS( THIS , "w2imp_jt" , "j",">" , 0 ) )						// Print SD performance.
+
+EQUATION("gammaSD_t")																// SD environmental preference. Object: Market.
+RESULT(SD_CNDS(THIS,"gamma_jt","j",">",0))						// Print SD environmental preference.
+		
+		// WHTAVE		  
+EQUATION("mu_t")																// WHTAVE mark-up. Object: Market.
+RESULT( WHTAVE_CNDS( THIS , "mu_jt" , "m_jt" , "j",">" , 0 ) )				// Print WHTAVE mark-up.
+
+EQUATION("p_t")																// WHTAVE price. Object: Market.
+RESULT( WHTAVE_CNDS( THIS , "p_jt" , "m_jt" , "j",">" , 0 ) )				// Print WHTAVE price.
+
+EQUATION("w1imp_t")															// WHTAVE market performance. Object: Market.
+RESULT( WHTAVE_CNDS( THIS , "w1imp_jt" , "m_jt" , "j",">" , 0 ) )			// Print WHTAVE performance.
+
+EQUATION("w2imp_t")															// WHTAVE environmental performance. Object: Market.
+RESULT( WHTAVE_CNDS( THIS , "w2imp_jt" , "m_jt" , "j",">" , 0 ) )			// Print WHTAVE performance.
+
+EQUATION("gamma_t")														// WHTAVE environmental preference. Object: Market.
+RESULT( WHTAVE_CNDS( THIS , "gamma_jt" , "m_jt" , "j",">" , 0 ) )			// Print WHTAVE environmental preference.
+
+EQUATION("gammaAVE_t")														// AVE environmental preference. Object: Market.
+RESULT( AVE_CNDS( THIS , "gamma_jt" , "j", ">" , 0 ) )						// Print AVE environmental preference.
+
+		// SKEWNESS
+EQUATION("mSK_t")															// Pearson median skewness: Market share
+if( T < 5 || SD_CNDS( THIS , "m_jt" , "j", ">" , 0 ) == 0 )
+	v[0] = 0;
+	else
+	v[0] = ( ( AVE_CNDS( THIS , "m_jt" , "j",">" , 0 ) - MED_CNDS( THIS , "m_jt" , "j",">" , 0 ) ) / SD_CNDS( THIS , "m_jt" , "j",">" , 0 ) );
+RESULT( v[0] )
+
+			// AGGREGATES
+EQUATION("Pi_t")															// Aggregate profits
+RESULT( SUM_CNDS( THIS , "Pi_jt" , "j" , ">" , 0 ) )
+
+EQUATION("GHG_t")															// Total carbon emissions
+v[0] = 0;
+CYCLE( cur, "Firms" )												// Cycle through firms
+{
+	v[10] = VS( cur , "m_jt" );												// Market shares
+	v[11] = VS( cur , "p_jt" );												// Retail price
+	v[12] = VS( cur , "w2imp_jt" );										// Carbon intensity
+	if( v[11] == 0 )														// Avoid invalid results
+		v[0] = 0;
+		else
+		v[0] = v[0] + v[12] * v[10] / v[11]; 								// Carbon intensity times quantity sold (MS / price)
+}
+RESULT( v[0] )
+
+EQUATION("Y_t")																				// Quantities produced
+v[0] = 0;
+CYCLE(cur, "Firms")
+{
+	v[10] = VS( cur , "m_jt" );																// Market share -> Sales revenue
+	v[11] = VS( cur , "p_jt" );																// Retail price
+	if( v[11] == 0 )																		// Avoid invalid results
+		v[0] = v[0];
+		else
+		v[0] = v[0] + v[10] / v[11]; // Add firms quantities
+}
+RESULT( v[0] )
+
+EQUATION("GDP_t")
+/*
+Comment: Nominal GDP. Market-level variable
+*/
+v[1] = VS(THIS,"Y_t");//Real GDP. Market-level variable.
+v[2] = VS(THIS,"p_t");//Price level. Market-level variable.
+v[0] = v[1] * v[2];//Nominal GDP
+RESULT(v[0])
+
+		// POLICY-RELATED STATISTICS
+		
+EQUATION("V_t")
+/*
+Comment: Percentage of firms being beneficiary. Market-level variable.
+*/
+v[1] = SUMS(THIS,"inV_jt");//Sum of firms being a beneficiary.
+v[2] = VS(PARENT,"J");//Number of firms
+v[0] = v[1]/v[2];//Ratio
+RESULT(v[0])
+
+EQUATION("mV_t")
+/*
+Comment: Combined market share of policy beneficiaries. Market-level variable.
+*/
+v[0] = SUM_CNDS(THIS,"m_jt","inV_jt","==",1);
+RESULT(v[0])
+
+EQUATION("S_t")
+/*
+Comment: Is the policy a success ? Market-level variable.
+*/
+v[1] = VS(PARENT,"w2T");//carbon intensity targe. Market-level variable.
+v[2] = VS(THIS,"w2imp_t");//Firm carbon intensity weighted average. Market-level variable.
+if(v[1]>=v[2])//if the market carbon intensity is lower than target
+	v[0] = 1;//The policy is a success
+	else
+	v[0] = 0;//Else, it is not.
+RESULT(v[0])
+
+EQUATION("GRD_t")																				// Expenditure on R&D subsidies
+v[0] = VS(PARENT,"sRD");																	// Subsidy on R&D expenditures
+v[1] = VS( PARENT , "cRD" );																	// R&D costs
+v[2] = SUM_CNDS( THIS , "q_jt" , "inV_jt" , "==" , 1 );											// #Searches conducted by policy beneficiaries
+RESULT( v[0] * v[1] * v[2] )
+
+EQUATION("GAS_t")																				// Expenditure on Green subsidies
+v[0] = VS(PARENT,"sAD");																	// Subsidy on green products
+v[1] = VS(THIS,"mV_t");																		// Market share of policy beneficiaries
+RESULT( v[0] * v[1] )
+
+EQUATION("GCT_t")																				// Expenditure on Carbon taxes
+v[0] = 0;																						// Start counter
+v[1] = VS( PARENT , "CoT" );																	// Carbon tax
+CYCLE(cur, "Firms")
+{
+	v[10] = VS( cur , "m_jt" ) / VS( cur , "p_jt" );											// Firm quantity produced
+	v[11] = VS( cur , "w2imp_jt" );															// Firm marginal carbon emissions
+	if( VS( cur , "p_jt" ) == 0 )																// Avoid invalid results
+		v[0] = v[0];
+		else
+		v[0] = v[0] - v[10] * v[11] * v[1];															// Sum of carbon taxes paid	
+}
+RESULT( v[0] )
+
+EQUATION("GCC_t")
+/*
+Comment: Cost of C&C.
+*/
+v[1] = VS(PARENT,"cRD");//Cost of research
+v[2] = VS(THIS,"memory_t");//Past cost of the policy (we only account for new searches)
+v[3] = VS(PARENT,"CCd");//Regulatory speed
+v[4] = VS(PARENT,"RP");//Is the research park activated?
+if(v[3] > 0)//If the policy is activated
+	v[10] = v[1] * v[2];//Research cost incurred in the exploraiton of each technology in RPM
+	else
+	v[10] = 0;//Else, no cost.
+if(v[4] == 1)
+	v[0] = v[10]/2;
+	else
+	v[0] = v[10];
+RESULT(v[0])
+
+EQUATION("GRP_t")
+/*
+Comment: Cost of the research park
+*/
+v[1] = VS(PARENT,"cRD");//Cost of research
+v[2] = VS(THIS,"memory_t");//Count objects in RPM
+v[3] = VS(PARENT,"CCd");//Regulatory speed
+v[4] = VS(PARENT,"RP");//Is the research park activated?
+if(v[4] == 1)//If the policy is activated
+	v[10] = v[1] * v[2];//Research cost incurred in the exploraiton of each technology in RPM
+	else
+	v[10] = 0;//Else, no cost.
+if(v[3] > 0)
+	v[0] = v[10]/2;
+	else
+	v[0] = v[10];
+RESULT(v[0])
+
+EQUATION("G_t")
+/*
+Comment: Government expenditure. Market-level variable
+*/
+v[1] = VS(THIS,"GRD_t");//Expenditure on R&D subsidies
+v[2] = VS(THIS,"GAS_t");//Expenditure on adoption subsidies
+v[3] = VS(THIS,"GCT_t");//Carbon tax revenues
+v[4] = VS(THIS,"GCC_t");//Expenditure on Command & Ccontrol
+v[5] = VS(THIS,"GRP_t");//Expenditure on the research park
+v[0] = v[1] + v[2] + v[3] + v[4] + v[5];//Sum flows
+RESULT(v[0])
+
+EQUATION("rG_t")
+/*
+Comment: Real government expenditure. Market-level variable.
+*/
+v[1] = VS(THIS,"G_t");//Government expenditure. Market-level variable.
+v[2] = VS(THIS,"p_t");//Weighted average of retail prices. Market-level variable.
+if( v[2] == 0 )//If denominator is 0
+	v[0] = 0;//Avoid invalid results
+	else
+	v[0] = v[1]/v[2];//Else, get ratio.
+RESULT(v[0])
+
+EQUATION("dead_t")
+/*
+Comment: Percentage of dead firms.
+*/
+v[1] = SUMS(THIS,"dead_jt");//Sum of dead firms.
+v[2] = VS(PARENT,"J");//Number of firms
+v[0] = v[1]/v[2];//Percentage
+RESULT(v[0])
+
+EQUATION("RP_t")
+/*
+Comment: Number of times the RP is being used.
+*/
+v[0] = SUMS(THIS,"RP_jt");//Number of times the RP is being used (counter incorporated)
+RESULT(v[0])
+
+EQUATION("M_t")
+/*
+Comment: Update RPM memory.
+*/
+v[1] = VLS(THIS,"M_t",1);//Start counter
+v[2] = VS(THIS,"memory_t");//New technologies discovered
+v[0] = v[1] + v[2];//Stock + Flow
+RESULT(v[0])
+
+		// EXPLAINING CHANGES IN GHG
+EQUATION("GHGTech_t")
+/*
+Comment: Changes in Greenhouse gases explained by technology adoption.
+*/
+v[1] = VLS(THIS,"GHG_t",1);//Past-period emissions. Meso-level variable.
+v[2] = VLS(THIS,"Y_t",1);//Past-period output. Meso-level variable.
+v[3] = 0;//Start counter
+CYCLE(cur,"Firms")// Cycle through firms
+{
+	v[10] = VS(cur,"w2imp_jt");// Current carbon intensity. Firm-level variable.
+	v[11] = VLS(cur,"y_jt",1);//Firm production. Firm-level variable.												
+	v[3] = v[3] + v[10] * v[11];//Greenhouse emissions only altering technology adoption
+}
+v[0] = v[3] - v[1];//Change in emissions, only explained by technology adoption.
+RESULT( v[0] )
+
+EQUATION("GHGComp_t")
+/*
+Comment: Changes in Greenhouse gases explained by compositional change.
+*/
+v[1] = VLS(THIS,"GHG_t",1);//Past-period emissions. Meso-level variable.
+v[2] = VLS(THIS,"Y_t",1);//Past-period output. Meso-level variable.
+v[3] = VS(THIS,"Y_t");//Current output. Meso-level variable
+v[4] = 0;//Start counter
+CYCLE(cur,"Firms")// Cycle through firms
+{
+	v[10] = VLS(cur,"w2imp_jt",1);// Past carbon intensity. Firm-level variable.
+	v[11] = VS(cur,"y_jt");//Current production. Firm-level variable.
+		if(v[3] == 0)//Avoid invalid results
+		v[4] = v[4];
+		else												
+		v[4] = v[4] + v[10] * v[2] * v[11]/v[3];//Greenhouse emissions only altering market share
+}
+v[0] = v[4] - v[1];//Change in emissions, only explained by compositional change.
+RESULT( v[0] )
+
+EQUATION("GHGProd_t")
+/*
+Comment: Changes in Greenhouse gases explained by production change.
+*/
+v[1] = VLS(THIS,"GHG_t",1);//Past-period emissions. Meso-level variable.
+v[2] = VLS(THIS,"Y_t",1);//Past-period output. Meso-level variable.
+v[3] = VS(THIS,"Y_t");//Current output. Meso-level variable
+v[4] = 0;//Start counter
+CYCLE(cur,"Firms")// Cycle through firms
+{
+	v[10] = VLS(cur,"w2imp_jt",1);// Past carbon intensity. Firm-level variable.
+	v[11] = VLS(cur,"y_jt",1);//Past production. Firm-level variable.
+	if(v[2] == 0)//Avoid invalid results.
+		v[4] = v[4];//Avoid invalid results
+		else												
+		v[4] = v[4] + v[10] * v[3] * v[11]/v[2];//Greenhouse emissions only altering production
+}
+v[0] = v[4] - v[1];//Change in emissions, only explained by production change.
+RESULT( v[0] )
+
+			// SEARCH-RELATED VARIABLES
+			
+EQUATION("sSearch_t")
+/*
+Comment: Share of firms searching.
+*/
+v[1] = 0;//Start counter
+v[2] = VS(PARENT,"J");//Number of firms
+CYCLE(cur, "Firms")//Cycle through firms
+{
+	v[11] = VS(cur,"q_jt");//Search jump
+	if(v[11] > 0)//If the firm is searching
+		v[1] = v[1] + 1;//Add to counter
+		else
+		v[1] = v[1];//Do not add
+}
+v[0] = v[1] / v[2];//Divide by total number of firms
+RESULT(v[0])
+
+EQUATION("sUnable_t")
+/*
+Comment: Share of firms unwilling to search.
+*/
+v[1] = 0;//Start counter
+v[2] = VS(PARENT,"J");//Number of firms
+v[3] = VS(PARENT,"cRD");//Cost of searching
+v[4] = VS(PARENT,"sRD");//Subsidize to research
+CYCLE(cur, "Firms")//Cycle through firms
+{
+	v[11] = VS(cur,"q_jt");//Search jump
+	v[12] = VLS(cur,"b_jt",1);//Firm budget (past-period)
+	v[13] = VLS(cur,"inV_jt",1);//Policy beneficiary(past-period)
+	if(v[11] == 0 && v[12] < 2 * v[3] * (1-v[4]*v[13]))//If the firm is not searching and does not have money to search
+		v[1] = v[1] + 1;//Add to counter
+		else
+		v[1] = v[1];//Do not add
+}
+v[0] = v[1] / v[2];//Divide by total number of firms
+RESULT(v[0])
+
+EQUATION("sUnwilling_t")
+/*
+Comment: Share of firms unable to search.
+*/
+v[1] = 0;//Start counter
+v[2] = VS(PARENT,"J");//Number of firms
+v[3] = VS(PARENT,"cRD");//Cost of searching
+v[4] = VS(PARENT,"sRD");//Subsidize to research
+CYCLE(cur, "Firms")//Cycle through firms
+{
+	v[11] = VS(cur,"q_jt");//Search jump
+	v[12] = VLS(cur,"b_jt",1);//Firm budget (past-period)
+	v[13] = VLS(cur,"inV_jt",1);//Policy beneficiary(past-period)
+	if(v[11] == 0 && v[12] >= 2 * v[3] * (1-v[4]*v[13]))//If the firm is not searching and has money to search
+		v[1] = v[1] + 1;//Add to counter
+		else
+		v[1] = v[1];//Do not add
+}
+v[0] = v[1] / v[2];//Divide by total number of firms
+RESULT(v[0])
+ 
+EQUATION("LongJumps_t")
+/*
+Comment: Counter of long-jumps being made
+*/
+v[0] = VLS(THIS,"LongJumps_t",1);//Past counter
+CYCLE(cur, "Firms")
+{
+	v[11] = VS(cur,"q_jt");//Search jump
+	if(v[11] == 2)//If it is long
+		v[0] = v[0] + 1;//Add to counter
+		else
+		v[0] = v[0];//Do not add
+}
+RESULT(v[0])
+
+			// AVERAGE ACROSS TIME
+EQUATION("AVEGHG_t")																		// Average GHG across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEGHG_t" , 1 ) * ( T - 2 ) + VS( THIS , "GHG_t" ) ) / ( T - 1) ;
+	else
+	v[0] = VS( THIS , "GHG_t" );
+RESULT( v[0] )
+			
+EQUATION("AVEY_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEY_t" , 1 ) * ( T - 2 ) + VS( THIS , "Y_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "Y_t" );
+RESULT( v[0] )
+
+EQUATION("AVEGDP_t")																		// Average nominal GDP across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEGDP_t" , 1 ) * ( T - 2 ) + VS( THIS , "GDP_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "GDP_t" );
+RESULT( v[0] )
+
+EQUATION("AVEG_t")																		// Average nominal government expenditure across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEG_t" , 1 ) * ( T - 2 ) + VS( THIS , "G_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "G_t" );
+RESULT( v[0] )
+
+EQUATION("AVErG_t")																		// Average real government expenditure across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVErG_t" , 1 ) * ( T - 2 ) + VS( THIS , "rG_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "rG_t" );
+RESULT( v[0] )
+
+EQUATION("AVEGHGProd_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEGHGProd_t" , 1 ) * ( T - 2 ) + VS( THIS , "GHGProd_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "GHGProd_t" );
+RESULT( v[0] )
+
+EQUATION("AVEGHGTech_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEGHGTech_t" , 1 ) * ( T - 2 ) + VS( THIS , "GHGTech_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "GHGTech_t" );
+RESULT( v[0] )
+
+EQUATION("AVEGHGComp_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEGHGComp_t" , 1 ) * ( T - 2 ) + VS( THIS , "GHGComp_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "GHGComp_t" );
+RESULT( v[0] )
+
+EQUATION("AVEsSearch_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEsSearch_t" , 1 ) * ( T - 2 ) + VS( THIS , "sSearch_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "sSearch_t" );
+RESULT( v[0] )
+
+EQUATION("AVEsUnwilling_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEsUnwilling_t" , 1 ) * ( T - 2 ) + VS( THIS , "sUnwilling_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "sUnwilling_t" );
+RESULT( v[0] )
+
+EQUATION("AVEsUnable_t")																		// Average production across the simulation
+if( T > 1 )
+	v[0] = ( VLS( THIS , "AVEsUnable_t" , 1 ) * ( T - 2 ) + VS( THIS , "sUnable_t" ) ) / ( T - 1 );
+	else
+	v[0] = VS( THIS , "sUnable_t" );
+RESULT( v[0] )
+MODELEND
+
+// do not add Equations in this area
+
+void close_sim(void)
+{
+	// close simulation special commands go here
+}
